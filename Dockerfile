@@ -51,7 +51,8 @@ RUN yum -y install gcc gcc-c++ make zlib zlib-devel openssl openssl-devel pcre p
 COPY nginx.conf /usr/local/src/nginx/conf
 COPY static /usr/local/src/nginx/data/static
 
-
+# COPY SSL CERT.
+COPY certs /usr/local/src/nginx/certs
 
 # Start Nginx.
 ENTRYPOINT ["/usr/local/src/nginx/sbin/nginx","-g","daemon off;"]
