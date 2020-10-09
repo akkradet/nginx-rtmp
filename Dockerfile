@@ -1,6 +1,6 @@
 FROM centos:7.8.2003
 
-LABEL author akkradet <akkradet7@gmail.com>
+LABEL author xnz <xnzsir@gmail.com>
 
 ENV NGINX_VERSION 1.18.0
 ENV NGINX_RTMP_VERSION 1.2.1
