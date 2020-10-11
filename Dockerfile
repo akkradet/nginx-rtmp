@@ -1,59 +1,169 @@
-FROM centos:7.8.2003
+ARG NGINX_VERSION=1.19.0
+ARG NGINX_RTMP_VERSION=1.2.1
+ARG FFMPEG_VERSION=4.1.3
+ARG NJS_VERSION=0.4.2
+##############################
+# Build the NGINX-build image.
+FROM alpine:3.8 as build-nginx
+ARG NGINX_VERSION
+ARG NGINX_RTMP_VERSION
+ARG NJS_VERSION
 
-LABEL author xnz <xnzsir@gmail.com>
+# Build dependencies.
+RUN apk add --update \
+  build-base \
+  ca-certificates \
+  curl \
+  gcc \
+  libc-dev \
+  libgcc \
+  linux-headers \
+  make \
+  musl-dev \
+  openssl \
+  openssl-dev \
+  pcre \
+  pcre-dev \
+  pkgconf \
+  pkgconfig \
+  zlib-dev
 
-ENV NGINX_VERSION 1.18.0
-ENV NGINX_RTMP_VERSION 1.2.1
-ENV FFMPEG_VERSION 2.8.15
+# Get nginx source.
+RUN cd /tmp && \
+  wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz && \
+  tar zxf nginx-${NGINX_VERSION}.tar.gz && \
+  rm nginx-${NGINX_VERSION}.tar.gz
 
-# Mapping Port
+# Get nginx-rtmp module.
+RUN cd /tmp && \
+  wget https://github.com/arut/nginx-rtmp-module/archive/v${NGINX_RTMP_VERSION}.tar.gz && \
+  tar zxf v${NGINX_RTMP_VERSION}.tar.gz && rm v${NGINX_RTMP_VERSION}.tar.gz
+
+RUN cd /tmp && \
+  wget http://hg.nginx.org/njs/archive/${NJS_VERSION}.tar.gz \
+  && tar xvf ${NJS_VERSION}.tar.gz && rm ${NJS_VERSION}.tar.gz
+
+# Compile nginx with nginx-rtmp module.
+RUN cd /tmp/nginx-${NGINX_VERSION} && \
+  ./configure \
+  --prefix=/opt/nginx \
+  --add-module=/tmp/nginx-rtmp-module-${NGINX_RTMP_VERSION} \
+  --add-module=/tmp/njs-${NJS_VERSION}/nginx \
+  --conf-path=/opt/nginx/nginx.conf \
+  --with-threads \
+  --with-file-aio \
+  --with-http_ssl_module \
+  --with-http_stub_status_module \
+  --with-http_auth_request_module \
+  --error-log-path=/opt/nginx/logs/error.log \
+  --http-log-path=/opt/nginx/logs/access.log \
+  --with-debug && \
+  cd /tmp/nginx-${NGINX_VERSION} && make && make install
+
+###############################
+# Build the FFmpeg-build image.
+FROM alpine:3.8 as build-ffmpeg
+ARG FFMPEG_VERSION
+ARG PREFIX=/usr/local
+ARG MAKEFLAGS="-j4"
+
+# FFmpeg build dependencies.
+RUN apk add --update \
+  build-base \
+  coreutils \
+  freetype-dev \
+  lame-dev \
+  libogg-dev \
+  libass \
+  libass-dev \
+  libvpx-dev \
+  libvorbis-dev \
+  libwebp-dev \
+  libtheora-dev \
+  opus-dev \
+  pkgconf \
+  pkgconfig \
+  rtmpdump-dev \
+  wget \
+  x264-dev \
+  x265-dev \
+  yasm
+
+RUN echo http://dl-cdn.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories
+RUN apk add --update fdk-aac-dev
+
+# Get FFmpeg source.
+RUN cd /tmp/ && \
+  wget http://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz && \
+  tar zxf ffmpeg-${FFMPEG_VERSION}.tar.gz && rm ffmpeg-${FFMPEG_VERSION}.tar.gz
+
+# Compile ffmpeg.
+RUN cd /tmp/ffmpeg-${FFMPEG_VERSION} && \
+  ./configure \
+  --prefix=${PREFIX} \
+  --enable-version3 \
+  --enable-gpl \
+  --enable-nonfree \
+  --enable-small \
+  --enable-libmp3lame \
+  --enable-libx264 \
+  --enable-libx265 \
+  --enable-libvpx \
+  --enable-libtheora \
+  --enable-libvorbis \
+  --enable-libopus \
+  --enable-libfdk-aac \
+  --enable-libass \
+  --enable-libwebp \
+  --enable-librtmp \
+  --enable-postproc \
+  --enable-avresample \
+  --enable-libfreetype \
+  --enable-openssl \
+  --disable-debug \
+  --disable-doc \
+  --disable-ffplay \
+  --extra-libs="-lpthread -lm" && \
+  make && make install && make distclean
+
+# Cleanup.
+RUN rm -rf /var/cache/* /tmp/*
+
+##########################
+# Build the release image.
+FROM alpine:3.8
+LABEL MAINTAINER Alfred Gutierrez <alf.g.jr@gmail.com>
+
+RUN apk add --update \
+  ca-certificates \
+  openssl \
+  pcre \
+  lame \
+  libogg \
+  libass \
+  libvpx \
+  libvorbis \
+  libwebp \
+  libtheora \
+  opus \
+  rtmpdump \
+  x264-dev \
+  x265-dev
+
+COPY --from=build-nginx /opt/nginx /opt/nginx
+COPY --from=build-ffmpeg /usr/local /usr/local
+COPY --from=build-ffmpeg /usr/lib/libfdk-aac.so.2 /usr/lib/libfdk-aac.so.2
+
+# Add NGINX config and static files.
+ADD nginx.conf /opt/nginx/nginx.conf
+
+ARG LIVESTREAM_AUTH_HOST=apache2
+RUN sed -i "s~#LIVESTREAM_AUTH_HOST_PLACEHOLDER~$LIVESTREAM_AUTH_HOST~g" /opt/nginx/nginx.conf
+
+RUN mkdir -p /opt/data && mkdir /www
+ADD static /www/static
+
 EXPOSE 1935
 EXPOSE 80
-EXPOSE 443
 
-
-# FFmpeg.  
-# Install EPEL Release because the installation needs to use another REPO source
-# Install Nux-Dextop source
-# Install FFmpeg
-RUN yum install -y epel-release --nogpgcheck \
-	&& rpm --import http://li.nux.ro/download/nux/RPM-GPG-KEY-nux.ro \
-	&& rpm -Uvh http://li.nux.ro/download/nux/dextop/el7/x86_64/nux-dextop-release-0-5.el7.nux.noarch.rpm \
-	&& yum install ffmpeg ffmpeg-devel -y
-
-
-# Nginx And Nginx-rtmp-module.
-# Build dependencies
-# Install wget
-# Download nginx and nginx-rtmp-module
-# Install nginx and nginx-rtmp-module
-# Cleanup.
-RUN yum -y install gcc gcc-c++ make zlib zlib-devel openssl openssl-devel pcre pcre-devel pkgconf pkgconfig \
-	&& cd /tmp \
-	&& mkdir -p ./data/nginx-rtmp-ffmpeg \
-	&& cd ./data/nginx-rtmp-ffmpeg/ \
-	&& yum -y install wget \
-	&& wget http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz \
-	&& wget https://github.com/arut/nginx-rtmp-module/archive/v${NGINX_RTMP_VERSION}.tar.gz \
-	&& tar -zxf nginx-${NGINX_VERSION}.tar.gz \
-	&& tar -zxf v${NGINX_RTMP_VERSION}.tar.gz \
-	&& cd nginx-${NGINX_VERSION}/ \
-	&& ./configure --prefix=/usr/local/src/nginx  --add-module=../nginx-rtmp-module-${NGINX_RTMP_VERSION} --with-debug --with-http_ssl_module \
-	&& make && make install \
-	&& cd /usr/local/src/nginx \
-	&& mkdir -p ./data/hls \
-	&& mkdir certs \
-	&& rm -rf /var/cache/* /tmp/* \
-	&& yum -y remove gcc*
-
-
-# COPY NGINX config and static files.
-COPY nginx.conf /usr/local/src/nginx/conf
-COPY static /usr/local/src/nginx/data/static
-
-# COPY SSL CERT.
-COPY certs /usr/local/src/nginx/certs
-
-# Start Nginx.
-ENTRYPOINT ["/usr/local/src/nginx/sbin/nginx","-g","daemon off;"]
-CMD ["-c","/usr/local/src/nginx/conf/nginx.conf"]
+CMD ["/opt/nginx/sbin/nginx"]

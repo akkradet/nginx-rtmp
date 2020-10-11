@@ -1,3 +1,3 @@
 #!/bin/sh
 
-docker build -t nginx_rtmp . && docker run -it -d -p 1935:1935 -p 80:80 -p 443:443
+docker build -t nginx-rtmp . && docker run -it -p 1935:1935 -p 8080:80 --rm nginx-rtmp
